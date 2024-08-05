@@ -92,7 +92,7 @@ module "eks" {
 
     eks_managed_node_groups = {
         node_group_1 = {
-            instance_type = "t2.micro"
+            instance_types = ["t2.small"]
             desired_capacity = 1
             max_capacity = 1
             min_capacity = 1
@@ -117,9 +117,9 @@ resource "kubernetes_namespace" "moho" {
   }
 }
 
-resource "kubernetes_deployment" "moho" {
+resource "kubernetes_deployment" "moho-backend" {
   metadata {
-    name = "moho"
+    name = "moho-backend-deployment"
     namespace = kubernetes_namespace.moho.metadata.0.name
   }
 
@@ -128,23 +128,23 @@ resource "kubernetes_deployment" "moho" {
 
     selector {
       match_labels = {
-        test = "MOHOApp"
+        test = "backend"
       }
     }
 
     template {
       metadata {
         labels = {
-          test = "MOHOApp"
+          test = "backend"
         }
       }
 
       spec {
         container {
-          image = "alexwhen/docker-2048"
-          name  = "moho-container"
+          name  = "moho-backend-container"
+          image = "680324637652.dkr.ecr.eu-central-1.amazonaws.com/moho-be:latest"
           port {
-            container_port = 80
+            container_port = 8080
           }
         }
       }
@@ -152,20 +152,110 @@ resource "kubernetes_deployment" "moho" {
   }
 }
 
-resource "kubernetes_service" "moho" {
+resource "kubernetes_service" "moho-backend" {
   metadata {
-    name = "moho"
+    name = "moho-backend-service"
     namespace = kubernetes_namespace.moho.metadata.0.name
   }
   spec {
     selector = {
-      test = "MOHOApp"
+      test = "backend"
     }
     port {
-      port        = 80
-      target_port = 80
+      port        = 8080
+      target_port = 8080
     }
 
     type = "LoadBalancer"
   }
+}
+
+resource "kubernetes_deployment" "moho-frontend" {
+  metadata {
+    name = "moho-frontend-deployment"
+    namespace = kubernetes_namespace.moho.metadata.0.name
+  }
+
+  spec {
+    replicas = 1
+
+    selector {
+      match_labels = {
+        test = "frontend"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          test = "frontend"
+        }
+      }
+
+      spec {
+        container {
+          name  = "moho-frontend-container"
+          image = "680324637652.dkr.ecr.eu-central-1.amazonaws.com/moho-fe:latest"
+          port {
+            container_port = 3000
+          }
+
+          env {
+            name  = "VITE_WEBSOCKET_URL"
+            value = "ws://moho-backend-service.${kubernetes_namespace.moho.metadata.0.name}.svc.cluster.local:8080/ws"
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "moho-frontend" {
+  metadata {
+    name = "moho-frontend-service"
+    namespace = kubernetes_namespace.moho.metadata.0.name
+  }
+  spec {
+    selector = {
+      test = "frontend"
+    }
+    port {
+      port        = 80
+      target_port = 3000
+    }
+
+    type = "LoadBalancer"
+  }
+}
+
+resource "null_resource" "update_frontend_env" {
+  provisioner "local-exec" {
+    command = <<EOT
+      #!/bin/bash
+      timeout 30m bash -c '
+      while true; do
+        FRONTEND_URL=$(kubectl get svc moho-frontend-service -n moho -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        if [ -z "$FRONTEND_URL" ]; then
+          echo "Waiting for frontend service to be provisioned..."
+          sleep 10
+          continue
+        fi
+        BACKEND_URL=$(kubectl get svc moho-backend-service -n moho -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        if [ -z "$BACKEND_URL" ]; then
+          echo "Waiting for backend service to be provisioned..."
+          sleep 10
+          continue
+        fi
+        echo "Updating VITE_WEBSOCKET_URL with backend service URL: $BACKEND_URL"
+        kubectl set env deployment/moho-frontend-deployment -n moho VITE_WEBSOCKET_URL="ws://$BACKEND_URL:8080/ws"
+        break
+      done
+      '
+    EOT
+  }
+
+  depends_on = [
+    kubernetes_service.moho-backend,
+    kubernetes_service.moho-frontend
+  ]
 }

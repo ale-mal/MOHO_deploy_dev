@@ -21,7 +21,7 @@ Go to AWS console:
 - EKS Clusters, check that cluster was created.
 - EC2 Auto Scaling groups, new group was created.
 - EC2 Instances, there should be instance with loaded kubernetes.
-- EC2 Load Balancer, new load balancer was deployed.
+- EC2 Load Balancer, new load balancers were deployed.
 
 Or check in command line:
 
@@ -41,6 +41,24 @@ From the `kubectl get svc` get list of services, find LoadBalancer and copy exte
 
 ```
 terraform destroy
+```
+
+### Debug
+
+Debug websocket at a debug pod:
+
+```
+kubectl run -i --tty --rm debug --image=alpine --restart=Never -- sh
+apk add --no-cache websocat
+websocat -v ws://moho-backend-service.moho.svc.cluster.local:8080/ws
+```
+
+Debug backend with port forwarding:
+
+```
+kubectl get pods -n moho --show-labels
+kubectl logs moho-backend-deployment-<id> -n moho
+kubectl port-forward moho-backend-deployment-<id> 8080:8080 -n moho
 ```
 
 ### Useful links
